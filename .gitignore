@@ -1,18 +1,508 @@
-# This .gitignore is appropriate for repositories deployed to GitHub Pages and using
-# a Gemfile as specified at https://github.com/github/pages-gem#conventional
+import React, { useEffect, useMemo, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Search, Filter, Plus, Car, Home, Banknote, ShieldCheck, Heart, HeartOff, Trash2, MapPin, Mail, Phone, ArrowUpDown, CheckCircle2, XCircle } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { ResponsiveContainer, BarChart, CartesianGrid, XAxis, YAxis, Tooltip, Bar } from "recharts";
 
-# Basic Jekyll gitignores (synchronize to Jekyll.gitignore)
-_site/
-.sass-cache/
-.jekyll-cache/
-.jekyll-metadata
+/**
+ * DistressX — Advanced React MVP (single-file)
+ * --------------------------------------------------
+ * What you get:
+ * - Search + filterable listings for vehicles & properties
+ * - Sort controls (price/age), watchlist/like, contact seller, lawyer assist
+ * - Add Listing modal (validated w/ Zod + react-hook-form)
+ * - Simple in-memory store (replace with API later)
+ * - Risk flags + affordability gauge sample chart (placeholder)
+ * - Clean Tailwind + shadcn/ui + framer-motion micro-interactions
+ *
+ * How to integrate with a backend later:
+ * - Replace fetchListings()/createListing()/toggleWatch() with axios calls
+ * - Connect to auth (e.g., Clerk/Auth.js) and role-based views (buyer/seller/lawyer)
+ * - Add file uploads (images, proof of ownership) via uploadcare/S3
+ * - Add payments/escrow via Peach/Paystack/Stripe + webhooks
+ */
 
-# Additional Ruby/bundler ignore for when you run: bundle install
-/vendor
+// ---------- Types & Validation ----------
+const ListingSchema = z.object({
+  type: z.enum(["vehicle", "property"]),
+  title: z.string().min(4),
+  description: z.string().min(10),
+  location: z.string().min(2),
+  price: z.coerce.number().positive(),
+  arrears: z.coerce.number().min(0),
+  handoverType: z.enum(["takeover-installments", "outright-discount"]).default("takeover-installments"),
+  contactEmail: z.string().email(),
+  contactPhone: z.string().min(7),
+  urgent: z.boolean().optional().default(false),
+});
 
-# Specific ignore for GitHub Pages
-# GitHub Pages will always use its own deployed version of pages-gem 
-# This means GitHub Pages will NOT use your Gemfile.lock and therefore it is
-# counterproductive to check this file into the repository.
-# Details at https://github.com/github/pages-gem/issues/768
-Gemfile.lock
+/** @typedef {z.infer<typeof ListingSchema>} ListingInput */
+
+// ---------- Mock Data (replace with API) ----------
+const seedListings = /** @type {Array<any>} */ ([
+  {
+    id: "veh-001",
+    type: "vehicle",
+    title: "2019 VW Polo Vivo Trendline",
+    description: "Seller in arrears 2 months. Full service history. Minor hail marks.",
+    location: "Pretoria, Gauteng",
+    price: 149000,
+    arrears: 8200,
+    handoverType: "takeover-installments",
+    contactEmail: "seller001@example.com",
+    contactPhone: "+27 82 000 0001",
+    images: ["https://images.unsplash.com/photo-1550355291-bbee04a92027?q=80&w=1600&auto=format&fit=crop"],
+    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 3, // 3 days ago
+    watched: false,
+  },
+  {
+    id: "prop-101",
+    type: "property",
+    title: "2-Bed Apartment — Hatfield (Near Gautrain)",
+    description: "Owner relocating. Bond in arrears 1 month. Includes parking bay.",
+    location: "Hatfield, Pretoria",
+    price: 820000,
+    arrears: 5600,
+    handoverType: "outright-discount",
+    contactEmail: "seller101@example.com",
+    contactPhone: "+27 72 555 1212",
+    images: ["https://images.unsplash.com/photo-1502005229762-cf1b2da7c52f?q=80&w=1600&auto=format&fit=crop"],
+    createdAt: Date.now() - 1000 * 60 * 60 * 24 * 7, // 7 days ago
+    watched: true,
+  },
+  {
+    id: "veh-002",
+    type: "vehicle",
+    title: "2021 Toyota Corolla Quest 1.8",
+    description: "Repossession risk. Good condition. Finance takeover possible.",
+    location: "Polokwane, Limpopo",
+    price: 189900,
+    arrears: 11300,
+    handoverType: "takeover-installments",
+    contactEmail: "seller002@example.com",
+    contactPhone: "+27 83 111 2222",
+    images: ["https://images.unsplash.com/photo-1589391886645-d51941baf7fb?q=80&w=1600&auto=format&fit=crop"],
+    createdAt: Date.now() - 1000 * 60 * 60 * 18,
+    watched: false,
+  },
+]);
+
+// ---------- Utilities ----------
+const currency = (n) => new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR", maximumFractionDigits: 0 }).format(n);
+const ago = (ts) => {
+  const d = Math.round((Date.now() - ts) / (1000 * 60 * 60 * 24));
+  return d <= 0 ? "today" : `${d} day${d > 1 ? "s" : ""} ago`;
+};
+
+// ---------- Pseudo API layer (swap with real API) ----------
+async function fetchListings() {
+  // Simulate network latency
+  await new Promise((r) => setTimeout(r, 300));
+  return [...seedListings];
+}
+async function createListing(input /** @type {ListingInput} */) {
+  await new Promise((r) => setTimeout(r, 400));
+  const id = `${input.type}-${Math.random().toString(36).slice(2, 8)}`;
+  const created = { id, ...input, images: [], createdAt: Date.now(), watched: false };
+  seedListings.unshift(created);
+  return created;
+}
+async function toggleWatch(id) {
+  await new Promise((r) => setTimeout(r, 200));
+  const item = seedListings.find((x) => x.id === id);
+  if (item) item.watched = !item.watched;
+  return item;
+}
+async function deleteListing(id) {
+  await new Promise((r) => setTimeout(r, 250));
+  const i = seedListings.findIndex((x) => x.id === id);
+  if (i >= 0) seedListings.splice(i, 1);
+}
+
+// ---------- Tiny risk/affordability helpers ----------
+function riskFlag(listing) {
+  if (listing.arrears > listing.price * 0.15) return { level: "high", text: "High arrears" };
+  if (listing.arrears > listing.price * 0.08) return { level: "med", text: "Medium arrears" };
+  return { level: "low", text: "Low arrears" };
+}
+
+const chartData = [
+  { name: "Low", value: 60 },
+  { name: "Medium", value: 30 },
+  { name: "High", value: 10 },
+];
+
+// ---------- Main App ----------
+export default function DistressX() {
+  const [q, setQ] = useState("");
+  const [type, setType] = useState("all");
+  const [sort, setSort] = useState("newest");
+  const [onlyWatched, setOnlyWatched] = useState(false);
+  const [listings, setListings] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    fetchListings().then((data) => {
+      if (!alive) return;
+      setListings(data);
+      setLoading(false);
+    });
+    return () => { alive = false };
+  }, []);
+
+  const filtered = useMemo(() => {
+    let data = [...listings];
+    if (type !== "all") data = data.filter((l) => l.type === type);
+    if (q.trim()) {
+      const s = q.toLowerCase();
+      data = data.filter((l) =>
+        [l.title, l.description, l.location].some((f) => f.toLowerCase().includes(s))
+      );
+    }
+    if (onlyWatched) data = data.filter((l) => l.watched);
+    if (sort === "price-asc") data.sort((a, b) => a.price - b.price);
+    if (sort === "price-desc") data.sort((a, b) => b.price - a.price);
+    if (sort === "newest") data.sort((a, b) => b.createdAt - a.createdAt);
+    return data;
+  }, [q, type, sort, onlyWatched, listings]);
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white p-6">
+      <header className="mx-auto max-w-7xl mb-6">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="flex h-12 w-12 items-center justify-center rounded-2xl bg-black text-white shadow">
+              <ShieldCheck className="h-6 w-6" />
+            </motion.div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">DistressX</h1>
+              <p className="text-sm text-slate-500">Find or offload vehicles & properties you can no longer afford — safely.</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <AddListingButton onAdded={(created) => setListings((s) => [created, ...s])} />
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-7xl grid gap-6">
+        {/* Controls */}
+        <Card className="border-slate-200">
+          <CardContent className="p-4">
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+              <div className="md:col-span-5 flex items-center gap-2">
+                <Search className="h-5 w-5 text-slate-500" />
+                <Input placeholder="Search (e.g., Corolla, Hatfield, arrears)" value={q} onChange={(e) => setQ(e.target.value)} className="h-10" />
+              </div>
+              <div className="md:col-span-3">
+                <Select value={type} onValueChange={setType}>
+                  <SelectTrigger className="h-10">
+                    <SelectValue placeholder="Type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All types</SelectItem>
+                    <SelectItem value="vehicle">Vehicles</SelectItem>
+                    <SelectItem value="property">Properties</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="md:col-span-3">
+                <Select value={sort} onValueChange={setSort}>
+                  <SelectTrigger className="h-10">
+                    <SelectValue placeholder="Sort" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="newest"><div className="flex items-center gap-2"><ArrowUpDown className="h-4 w-4"/>Newest</div></SelectItem>
+                    <SelectItem value="price-asc">Price: Low → High</SelectItem>
+                    <SelectItem value="price-desc">Price: High → Low</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="md:col-span-1 flex items-center justify-end gap-2">
+                <Switch checked={onlyWatched} onCheckedChange={setOnlyWatched} />
+                <span className="text-sm text-slate-600">Watchlist</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Insights */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <Card className="border-slate-200">
+            <CardHeader>
+              <CardTitle className="text-base">Market Snapshot</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-48">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={chartData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="name" />
+                    <YAxis />
+                    <Tooltip />
+                    <Bar dataKey="value" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Distribution of indicative arrears-risk levels for current listings.</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 lg:col-span-2">
+            <CardHeader>
+              <CardTitle className="text-base">Legal Assist</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col md:flex-row items-start md:items-center gap-4">
+              <div className="rounded-2xl p-3 bg-slate-50 border border-slate-200">
+                <ShieldCheck className="h-6 w-6" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm text-slate-700">Have a lawyer structure your instalment sale or validate paperwork before you commit.</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Badge variant="secondary">Contract templates</Badge>
+                  <Badge variant="secondary">Escrow guidance</Badge>
+                  <Badge variant="secondary">Title checks</Badge>
+                </div>
+              </div>
+              <Button variant="default" className="rounded-2xl">Book a consult</Button>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Listings */}
+        <Tabs defaultValue="all" value={type === "all" ? "all" : type} onValueChange={setType}>
+          <TabsList className="grid grid-cols-3 w-full md:w-auto">
+            <TabsTrigger value="all">All</TabsTrigger>
+            <TabsTrigger value="vehicle" className="flex items-center gap-2"><Car className="h-4 w-4"/>Vehicles</TabsTrigger>
+            <TabsTrigger value="property" className="flex items-center gap-2"><Home className="h-4 w-4"/>Properties</TabsTrigger>
+          </TabsList>
+          <TabsContent value={type === "all" ? "all" : type} className="pt-4">
+            <AnimatePresence mode="popLayout">
+              {loading ? (
+                <div className="text-sm text-slate-500">Loading listings…</div>
+              ) : filtered.length === 0 ? (
+                <EmptyState />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {filtered.map((l) => (
+                    <ListingCard key={l.id} listing={l} onToggleWatch={async () => { await toggleWatch(l.id); setListings([...seedListings]); }} onDelete={async () => { await deleteListing(l.id); setListings([...seedListings]); }} />
+                  ))}
+                </div>
+              )}
+            </AnimatePresence>
+          </TabsContent>
+        </Tabs>
+      </main>
+
+      <footer className="mx-auto max-w-7xl py-8 text-center text-xs text-slate-500">
+        © {new Date().getFullYear()} DistressX — MVP. Replace mock API with your backend.
+      </footer>
+    </div>
+  );
+}
+
+// ---------- Components ----------
+function ListingCard({ listing, onToggleWatch, onDelete }) {
+  const icon = listing.type === "vehicle" ? <Car className="h-4 w-4"/> : <Home className="h-4 w-4"/>;
+  const risk = riskFlag(listing);
+  const riskColor = risk.level === "high" ? "bg-red-100 text-red-700" : risk.level === "med" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700";
+
+  return (
+    <motion.div layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+      <Card className="overflow-hidden border-slate-200 hover:shadow-md transition-shadow rounded-2xl">
+        {listing.images?.[0] && (
+          <div className="aspect-[16/9] w-full bg-slate-100 overflow-hidden">
+            <img src={listing.images[0]} alt={listing.title} className="h-full w-full object-cover" />
+          </div>
+        )}
+        <CardContent className="p-4">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <Badge className="rounded-full" variant="secondary">{icon} {listing.type}</Badge>
+                <Badge className={`${riskColor} rounded-full border-0`}>{risk.text}</Badge>
+                {listing.handoverType === "takeover-installments" ? (
+                  <Badge variant="outline" className="rounded-full"><Banknote className="h-3 w-3 mr-1"/>Take over</Badge>
+                ) : (
+                  <Badge variant="outline" className="rounded-full">Discount</Badge>
+                )}
+              </div>
+              <h3 className="mt-2 text-lg font-semibold leading-tight">{listing.title}</h3>
+              <p className="mt-1 text-sm text-slate-600 line-clamp-2">{listing.description}</p>
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                <div className="flex items-center gap-1"><MapPin className="h-4 w-4"/>{listing.location}</div>
+                <div className="flex items-center gap-1"><Mail className="h-4 w-4"/>{listing.contactEmail}</div>
+                <div className="flex items-center gap-1"><Phone className="h-4 w-4"/>{listing.contactPhone}</div>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-xl font-bold">{currency(listing.price)}</div>
+              <div className="text-xs text-slate-500">Arrears: {currency(listing.arrears)}</div>
+              <div className="text-xs text-slate-400">Posted {ago(listing.createdAt)}</div>
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Button variant="secondary" className="rounded-2xl" onClick={onToggleWatch}>
+                {listing.watched ? <><HeartOff className="h-4 w-4 mr-1"/>Unwatch</> : <><Heart className="h-4 w-4 mr-1"/>Watch</>}
+              </Button>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <Button variant="outline" className="rounded-2xl">Contact seller</Button>
+                </DialogTrigger>
+                <DialogContent className="rounded-2xl">
+                  <DialogHeader>
+                    <DialogTitle>Contact seller — {listing.title}</DialogTitle>
+                  </DialogHeader>
+                  <p className="text-sm text-slate-600">We will share your details with the seller and (optionally) a panel lawyer.</p>
+                  <div className="grid gap-3">
+                    <Input placeholder="Your full name"/>
+                    <Input placeholder="Email"/>
+                    <Input placeholder="Phone"/>
+                    <div className="flex items-center gap-2">
+                      <Switch id="lawyer" defaultChecked />
+                      <Label htmlFor="lawyer" className="text-sm">Loop in a lawyer</Label>
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button className="rounded-2xl"><CheckCircle2 className="h-4 w-4 mr-1"/>Send</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            </div>
+            <Button variant="ghost" className="text-red-600 hover:text-red-700" onClick={onDelete}><Trash2 className="h-4 w-4"/></Button>
+          </div>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="rounded-2xl border border-dashed border-slate-300 p-10 text-center">
+      <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
+        <Filter className="h-6 w-6 text-slate-500"/>
+      </div>
+      <p className="text-sm text-slate-600">No listings match your filters. Try clearing search, or add a new listing.</p>
+    </div>
+  );
+}
+
+function AddListingButton({ onAdded }) {
+  const [open, setOpen] = useState(false);
+
+  const formSchema = ListingSchema;
+  const { register, handleSubmit, reset, formState: { errors }, setValue, watch } = useForm({ resolver: zodResolver(formSchema), defaultValues: { type: "vehicle", handoverType: "takeover-installments", arrears: 0 } });
+
+  const submit = async (values) => {
+    const created = await createListing(values);
+    onAdded?.(created);
+    setOpen(false);
+    reset();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button className="rounded-2xl"><Plus className="h-4 w-4 mr-1"/>Add listing</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-xl rounded-2xl">
+        <DialogHeader>
+          <DialogTitle>Add a distressed asset</DialogTitle>
+        </DialogHeader>
+        <form className="grid gap-3" onSubmit={handleSubmit(submit)}>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Type</Label>
+              <Select value={watch("type") || "vehicle"} onValueChange={(v) => setValue("type", v)}>
+                <SelectTrigger className="h-10"><SelectValue/></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="vehicle">Vehicle</SelectItem>
+                  <SelectItem value="property">Property</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Handover</Label>
+              <Select value={watch("handoverType") || "takeover-installments"} onValueChange={(v) => setValue("handoverType", v)}>
+                <SelectTrigger className="h-10"><SelectValue/></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="takeover-installments">Take over instalments</SelectItem>
+                  <SelectItem value="outright-discount">Outright discount</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div>
+            <Label>Title</Label>
+            <Input placeholder="e.g., 2019 VW Polo Vivo" {...register("title")} />
+            {errors.title && <FormError>{errors.title.message}</FormError>}
+          </div>
+          <div>
+            <Label>Description</Label>
+            <Textarea placeholder="Condition, reason for distress, finance status…" {...register("description")} />
+            {errors.description && <FormError>{errors.description.message}</FormError>}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Location</Label>
+              <Input placeholder="City, Province" {...register("location")} />
+              {errors.location && <FormError>{errors.location.message}</FormError>}
+            </div>
+            <div>
+              <Label>Price (ZAR)</Label>
+              <Input type="number" step="100" placeholder="e.g., 189900" {...register("price", { valueAsNumber: true })} />
+              {errors.price && <FormError>{errors.price.message}</FormError>}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Arrears (ZAR)</Label>
+              <Input type="number" step="100" placeholder="e.g., 8500" {...register("arrears", { valueAsNumber: true })} />
+              {errors.arrears && <FormError>{errors.arrears.message}</FormError>}
+            </div>
+            <div className="flex items-end gap-2">
+              <Switch id="urgent" onCheckedChange={(v) => setValue("urgent", v)} />
+              <Label htmlFor="urgent" className="text-sm">Mark as urgent</Label>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Contact email</Label>
+              <Input type="email" placeholder="seller@example.com" {...register("contactEmail")} />
+              {errors.contactEmail && <FormError>{errors.contactEmail.message}</FormError>}
+            </div>
+            <div>
+              <Label>Contact phone</Label>
+              <Input placeholder="+27 …" {...register("contactPhone")} />
+              {errors.contactPhone && <FormError>{errors.contactPhone.message}</FormError>}
+            </div>
+          </div>
+          <DialogFooter className="pt-2">
+            <Button type="button" variant="outline" className="rounded-2xl" onClick={() => setOpen(false)}><XCircle className="h-4 w-4 mr-1"/>Cancel</Button>
+            <Button type="submit" className="rounded-2xl"><CheckCircle2 className="h-4 w-4 mr-1"/>Save listing</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function FormError({ children }) {
+  return <div className="mt-1 text-xs text-red-600">{children}</div>;
+}
